@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>样机需求跟催</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <p class="eyebrow">飞书机器人</p>
+        <h1>样机需求跟催</h1>
+        <p class="description">读取指定硬件阶段，预览未填写项，确认后定向发送提醒。</p>
+      </header>
+
+      <form id="preview-form" class="panel">
+        <label for="spreadsheet-url">飞书电子表格链接</label>
+        <input id="spreadsheet-url" name="spreadsheetUrl" type="url" required
+               placeholder="https://...feishu.cn/wiki/... 或 /sheets/...?sheet=...">
+
+        <label for="stage-name">硬件阶段</label>
+        <input id="stage-name" name="stageName" required maxlength="64" placeholder="例如 PR1">
+
+        <button type="submit">生成预览</button>
+      </form>
+
+      <section id="result" class="panel hidden" aria-live="polite"></section>
+    </main>
+    <script src="{{ url_for('static', path='/app.js') }}" defer></script>
+  </body>
+</html>
+
