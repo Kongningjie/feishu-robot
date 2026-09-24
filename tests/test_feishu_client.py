@@ -3,7 +3,7 @@ import pytest
 import respx
 
 from app.clients.feishu import FeishuClient, parse_spreadsheet_url
-from app.core.errors import StructuralError
+from app.core.errors import MessageSendError, StructuralError
 
 BASE = "https://open.feishu.cn/open-apis"
 HOSTS = {"company.feishu.cn"}
@@ -202,3 +202,61 @@ async def test_expired_token_is_refreshed_and_request_replayed_once() -> None:
     assert token_route.call_count == 2
     assert sheet_route.call_count == 2
     assert sheets == [{"sheet_id": "s1"}]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_send_card_uses_open_id_and_returns_message_id() -> None:
+    respx.post(f"{BASE}/auth/v3/tenant_access_token/internal").mock(
+        return_value=httpx.Response(
+            200, json={"code": 0, "tenant_access_token": "token", "expire": 7200}
+        )
+    )
+    route = respx.post(
+        f"{BASE}/im/v1/messages", params={"receive_id_type": "open_id"}
+    ).mock(return_value=httpx.Response(200, json={"code": 0, "data": {"message_id": "om_1"}}))
+    async with httpx.AsyncClient() as http:
+        client = FeishuClient(http, "app", "secret", allowed_hosts=HOSTS)
+        message_id = await client.send_card("ou_secret", "{\"schema\":\"2.0\"}")
+    assert message_id == "om_1"
+    assert route.calls.last.request.content
+    assert b'ou_secret' in route.calls.last.request.content
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_send_card_classifies_rate_limit_and_retry_after() -> None:
+    respx.post(f"{BASE}/auth/v3/tenant_access_token/internal").mock(
+        return_value=httpx.Response(
+            200, json={"code": 0, "tenant_access_token": "token", "expire": 7200}
+        )
+    )
+    respx.post(f"{BASE}/im/v1/messages").mock(
+        return_value=httpx.Response(429, headers={"Retry-After": "3"}, json={"code": 1})
+    )
+    async with httpx.AsyncClient() as http:
+        client = FeishuClient(http, "app", "secret", allowed_hosts=HOSTS)
+        with pytest.raises(MessageSendError) as caught:
+            await client.send_card("ou_secret", "{}")
+    assert caught.value.code == "UPSTREAM_RATE_LIMITED"
+    assert caught.value.retryable is True
+    assert caught.value.retry_after_seconds == 3
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_send_card_does_not_retry_permission_error() -> None:
+    respx.post(f"{BASE}/auth/v3/tenant_access_token/internal").mock(
+        return_value=httpx.Response(
+            200, json={"code": 0, "tenant_access_token": "token", "expire": 7200}
+        )
+    )
+    respx.post(f"{BASE}/im/v1/messages").mock(
+        return_value=httpx.Response(403, json={"code": 230006, "msg": "forbidden"})
+    )
+    async with httpx.AsyncClient() as http:
+        client = FeishuClient(http, "app", "secret", allowed_hosts=HOSTS)
+        with pytest.raises(MessageSendError) as caught:
+            await client.send_card("ou_secret", "{}")
+    assert caught.value.code == "MESSAGE_PERMISSION_DENIED"
+    assert caught.value.retryable is False

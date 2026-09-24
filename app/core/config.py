@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     app_name: str = "feishu-sample-reminder"
     app_timezone: str = "Asia/Shanghai"
     log_level: str = "INFO"
+    allowed_hosts: str = "localhost,127.0.0.1,testserver"
+    csrf_enabled: bool = True
+    csrf_cookie_secure: bool = False
+    rate_limit_enabled: bool = True
+    rate_limit_requests: int = Field(default=60, gt=0)
+    rate_limit_window_seconds: int = Field(default=60, gt=0)
 
     feishu_app_id: str = ""
     feishu_app_secret: str = ""
@@ -27,6 +33,10 @@ class Settings(BaseSettings):
     max_recipients: int = Field(default=300, gt=0)
     send_concurrency: int = Field(default=5, gt=0)
     send_auto_retries: int = Field(default=2, ge=0)
+    send_lock_ttl_seconds: int = Field(default=600, gt=0)
+    recovery_scan_seconds: int = Field(default=30, gt=0)
+    send_task_timeout_seconds: int = Field(default=600, gt=0)
+    message_max_bytes: int = Field(default=30_000, gt=0)
     http_connect_timeout_seconds: float = Field(default=3, gt=0)
     http_read_timeout_seconds: float = Field(default=10, gt=0)
     template_version: int = Field(default=1, gt=0)
@@ -37,6 +47,10 @@ class Settings(BaseSettings):
         return {
             host.strip().lower() for host in self.feishu_allowed_hosts.split(",") if host.strip()
         }
+
+    @property
+    def allowed_http_hosts(self) -> list[str]:
+        return [host.strip() for host in self.allowed_hosts.split(",") if host.strip()]
 
     @property
     def missing_required_settings(self) -> tuple[str, ...]:

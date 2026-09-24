@@ -10,7 +10,7 @@ class HealthyRedis:
 
 
 def test_live_uses_response_envelope() -> None:
-    app = create_app(Settings(_env_file=None))
+    app = create_app(Settings(_env_file=None, app_env="test"))
     with TestClient(app) as client:
         response = client.get("/health/live")
     assert response.status_code == 200
@@ -23,7 +23,9 @@ def test_live_uses_response_envelope() -> None:
 
 
 def test_ready_rejects_missing_required_configuration() -> None:
-    app = create_app(Settings(_env_file=None, feishu_app_id="", feishu_app_secret=""))
+    app = create_app(
+        Settings(_env_file=None, app_env="test", feishu_app_id="", feishu_app_secret="")
+    )
     with TestClient(app) as client:
         response = client.get("/health/ready")
     assert response.status_code == 503
@@ -33,6 +35,7 @@ def test_ready_rejects_missing_required_configuration() -> None:
 def test_ready_checks_redis() -> None:
     settings = Settings(
         _env_file=None,
+        app_env="test",
         feishu_app_id="app-id",
         feishu_app_secret="secret",
         feishu_allowed_hosts="example.feishu.cn",

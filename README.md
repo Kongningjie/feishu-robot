@@ -1,6 +1,6 @@
 # 飞书样机需求跟催机器人
 
-基于 FastAPI 的飞书样机需求跟催服务。当前已完成阶段 1：读取普通飞书电子表格、识别指定硬件阶段的未填写项、通过申请人邮箱映射 `open_id`，并生成 24 小时有效的只读预览快照。消息发送尚未实现。
+基于 FastAPI 的飞书样机需求跟催服务。阶段 1～3 的本地与 Mock 验收已完成：读取普通飞书电子表格并生成 24 小时只读预览快照；人工确认后按快照异步发送消息卡片；提供 Redis 幂等、逐人结果、自动重试、人工仅重试失败项、任务恢复、TPM 操作页面、安全控制、可观测性和双实例容器部署。真实飞书与公司基础设施联调尚待执行。
 
 ## 技术栈
 
@@ -22,14 +22,18 @@ docker compose up -d redis
 uvicorn app.main:app --reload
 ```
 
-访问 `http://127.0.0.1:8000/`，健康检查为 `GET /health/live` 和 `GET /health/ready`。缺少飞书凭据或 Redis 不可用时，存活检查仍成功，就绪检查返回 `503`。
+访问 `http://127.0.0.1:8000/`。默认 Compose 启动两个应用实例、共享 Redis 和本地验收网关；应用与 Redis 不直接映射宿主机端口。健康检查为 `GET /health/live` 和 `GET /health/ready`，指标为 `GET /internal/metrics`。缺少飞书凭据或 Redis 不可用时，存活检查仍成功，就绪检查返回 `503`。
 
-阶段 1 接口：
+当前接口：
 
 - `POST /api/v1/previews`：创建预览；
-- `GET /api/v1/previews/{previewId}`：读取预览。
+- `GET /api/v1/previews/{previewId}`：读取预览和发送进度；
+- `POST /api/v1/previews/{previewId}/send`：确认发送，返回 `202 Accepted`；
+- `POST /api/v1/previews/{previewId}/retry-failures`：人工仅重试失败项，返回 `202 Accepted`。
 
-所有 API 均使用 `success/code/message/data` 统一响应外壳。阶段 2 的发送与失败重试路由当前不开放。
+所有 API 均严格使用 `success/code/message/data` 统一响应外壳。发送和重试接口不接收请求体，接收人完全由服务端快照和失败结果决定。
+
+部署、回滚、监控及排障说明见 [docs/部署与运维.md](docs/部署与运维.md)。真实联调前必须轮换曾暴露的 Secret，并使用脱敏测试表与内部测试账号。
 
 运行检查：
 
@@ -47,7 +51,7 @@ app/
   core/             配置、日志
   models/           内部领域模型
   repositories/     Redis 预览快照存储
-  services/         模板解析和预览聚合业务逻辑
+  services/         模板解析、预览聚合、卡片构建和发送编排
   static/           原生前端资源
   templates/        Jinja2 页面
 docs/implementation-plan/

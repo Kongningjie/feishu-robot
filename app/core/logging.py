@@ -4,6 +4,8 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
+from app.core.observability import preview_id_context, request_id_context
+
 _EMAIL_RE = re.compile(r"(?i)\b([a-z0-9._%+-])[a-z0-9._%+-]*@([a-z0-9-])[a-z0-9.-]*\.[a-z]{2,}\b")
 _TOKEN_RE = re.compile(r"(?i)\b(?:t-|ou_|shtcn|wikcn)[a-z0-9_-]{6,}\b")
 _SHEET_QUERY_RE = re.compile(r"(?i)([?&]sheet=)[^&#\s]+")
@@ -24,6 +26,8 @@ class JsonFormatter(logging.Formatter):
             "level": record.levelname,
             "logger": record.name,
             "message": redact(record.getMessage()),
+            "requestId": request_id_context.get(),
+            "previewId": preview_id_context.get(),
         }
         if record.exc_info:
             payload["exception"] = redact(self.formatException(record.exc_info))

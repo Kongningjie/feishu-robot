@@ -63,3 +63,25 @@ class PreviewSnapshot:
     anomalies: tuple[PreviewAnomalyData, ...]
     created_at: datetime
     expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RecipientSendResult:
+    open_id: str
+    status: str
+    attempts: int
+    updated_at: datetime
+    message_id: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    feishu_code: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SendResult:
+    preview_id: str
+    status: str
+    snapshot: PreviewSnapshot
+    recipients: tuple[RecipientSendResult, ...]
+    started_at: datetime
+    updated_at: datetime

@@ -45,6 +45,17 @@ class PreviewAnomaly(ApiModel):
     message: str
 
 
+class RecipientSendResultResponse(ApiModel):
+    display_name: str = Field(alias="displayName")
+    masked_email: str = Field(alias="maskedEmail")
+    status: str
+    attempts: int = Field(ge=0)
+    message_id: str | None = Field(default=None, alias="messageId")
+    error_code: str | None = Field(default=None, alias="errorCode")
+    error_message: str | None = Field(default=None, alias="errorMessage")
+    updated_at: datetime | None = Field(default=None, alias="updatedAt")
+
+
 class PreviewResponse(ApiModel):
     preview_id: str = Field(alias="previewId")
     status: PreviewStatus
@@ -61,6 +72,13 @@ class PreviewResponse(ApiModel):
     anomaly_count: int = Field(alias="anomalyCount", ge=0)
     recipients: list[RecipientPreview] = Field(default_factory=list)
     anomalies: list[PreviewAnomaly] = Field(default_factory=list)
+    success_count: int = Field(default=0, alias="successCount", ge=0)
+    failure_count: int = Field(default=0, alias="failureCount", ge=0)
+    pending_count: int = Field(default=0, alias="pendingCount", ge=0)
+    attempt_count: int = Field(default=0, alias="attemptCount", ge=0)
+    send_results: list[RecipientSendResultResponse] = Field(
+        default_factory=list, alias="sendResults"
+    )
 
 
 T = TypeVar("T")
@@ -82,3 +100,5 @@ class SendResponse(ApiModel):
     status: PreviewStatus
     success_count: int = Field(alias="successCount", ge=0)
     failure_count: int = Field(alias="failureCount", ge=0)
+    pending_count: int = Field(alias="pendingCount", ge=0)
+    attempt_count: int = Field(alias="attemptCount", ge=0)

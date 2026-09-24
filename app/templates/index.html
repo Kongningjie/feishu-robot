@@ -3,31 +3,121 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="csrf-token" content="{{ csrf_token }}">
     <title>样机需求跟催</title>
     <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
   </head>
   <body>
-    <main class="container">
-      <header>
-        <p class="eyebrow">飞书机器人</p>
-        <h1>样机需求跟催</h1>
-        <p class="description">读取指定硬件阶段，预览未填写项，确认后定向发送提醒。</p>
+    <div class="page-shell">
+      <header class="site-header">
+        <div class="brand-mark" aria-hidden="true">催</div>
+        <div>
+          <p class="eyebrow">FEISHU REMINDER</p>
+          <h1>样机需求跟催</h1>
+          <p class="description">按硬件阶段识别未填写项，确认后向责任人定向发送提醒。</p>
+        </div>
+        <span class="environment-badge">内部工具</span>
       </header>
 
-      <form id="preview-form" class="panel">
-        <label for="spreadsheet-url">飞书电子表格链接</label>
-        <input id="spreadsheet-url" name="spreadsheetUrl" type="url" required
-               placeholder="https://...feishu.cn/wiki/... 或 /sheets/...?sheet=...">
+      <main>
+        <section class="panel input-panel" aria-labelledby="input-title">
+          <div class="section-heading">
+            <div>
+              <p class="step-label">步骤 1</p>
+              <h2 id="input-title">选择表格与阶段</h2>
+            </div>
+            <button id="new-preview-button" class="button button-quiet hidden" type="button">重新预览</button>
+          </div>
 
-        <label for="stage-name">硬件阶段</label>
-        <input id="stage-name" name="stageName" required maxlength="64" placeholder="例如 PR1">
+          <form id="preview-form">
+            <div class="field field-wide">
+              <label for="spreadsheet-url">飞书电子表格链接</label>
+              <input id="spreadsheet-url" name="spreadsheetUrl" type="url" required
+                     autocomplete="off"
+                     placeholder="https://company.feishu.cn/sheets/...?sheet=...">
+              <p class="field-help">支持公司域名下的 Sheets 直链或指向普通电子表格的 Wiki 链接。</p>
+            </div>
+            <div class="field">
+              <label for="stage-name">硬件阶段</label>
+              <input id="stage-name" name="stageName" required maxlength="64"
+                     autocomplete="off" placeholder="例如 PR1">
+            </div>
+            <button id="preview-button" class="button button-primary" type="submit">
+              <span class="button-label">生成预览</span>
+              <span class="spinner hidden" aria-hidden="true"></span>
+            </button>
+          </form>
+        </section>
 
-        <button type="submit">生成预览</button>
+        <div id="notice" class="notice hidden" role="alert"></div>
+
+        <section id="preview-section" class="panel hidden" aria-labelledby="preview-title" aria-live="polite">
+          <div class="section-heading">
+            <div>
+              <p class="step-label">步骤 2</p>
+              <h2 id="preview-title">只读预览</h2>
+            </div>
+            <span id="status-badge" class="status-badge"></span>
+          </div>
+
+          <div id="project-meta" class="project-meta"></div>
+          <div id="summary-grid" class="summary-grid"></div>
+
+          <div class="content-section">
+            <div class="subheading">
+              <h3>待提醒责任人</h3>
+              <span id="recipient-caption" class="muted"></span>
+            </div>
+            <div id="recipient-list" class="recipient-list"></div>
+            <div id="empty-state" class="empty-state hidden">
+              <div class="empty-icon" aria-hidden="true">✓</div>
+              <strong>当前阶段无待催项</strong>
+              <p>没有可发送的责任人，请检查其他阶段或更新表格后重新预览。</p>
+            </div>
+          </div>
+
+          <details id="anomaly-section" class="anomaly-section hidden">
+            <summary>查看隔离的异常行 <span id="anomaly-count"></span></summary>
+            <div id="anomaly-list" class="anomaly-list"></div>
+          </details>
+
+          <div id="send-progress" class="progress-card hidden">
+            <div class="progress-heading">
+              <div>
+                <strong id="progress-title">正在发送提醒</strong>
+                <p id="progress-description">发送在后台执行，页面会自动更新结果。</p>
+              </div>
+              <span id="progress-fraction"></span>
+            </div>
+            <progress id="progress-bar" class="progress-track" max="100" value="0"></progress>
+          </div>
+
+          <div class="action-bar">
+            <p id="action-hint" class="action-hint">预览内容不可编辑。如有问题，请修改原表后重新预览。</p>
+            <div class="action-buttons">
+              <button id="retry-button" class="button button-secondary hidden" type="button">仅重试失败项</button>
+              <button id="send-button" class="button button-primary" type="button">确认并发送</button>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer>数据来自当前预览快照 · 页面不会保存完整邮箱或飞书用户标识</footer>
+    </div>
+
+    <dialog id="confirm-dialog" aria-labelledby="confirm-title">
+      <form method="dialog" class="dialog-card">
+        <div class="dialog-icon" aria-hidden="true">!</div>
+        <h2 id="confirm-title">确认发送提醒？</h2>
+        <p id="confirm-summary"></p>
+        <div class="warning-box">发送后不可撤回。系统将严格按照当前只读快照发送，不会重新读取表格。</div>
+        <div class="dialog-actions">
+          <button id="cancel-dialog-button" class="button button-quiet" type="button">取消</button>
+          <button id="confirm-send-button" class="button button-primary" type="button">确认发送</button>
+        </div>
       </form>
+    </dialog>
 
-      <section id="result" class="panel hidden" aria-live="polite"></section>
-    </main>
     <script src="{{ url_for('static', path='/app.js') }}" defer></script>
   </body>
 </html>
-

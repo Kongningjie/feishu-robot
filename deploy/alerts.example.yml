@@ -1,0 +1,30 @@
+alerts:
+  - name: redis_unavailable
+    source: health_or_metric
+    condition: /health/ready returns REDIS_NOT_READY or redis_errors_total increases
+    severity: critical
+    for: 1m
+  - name: token_refresh_failure
+    source: metric
+    condition: token_refresh_failure_total increases twice within 5m
+    severity: critical
+    for: 0m
+  - name: send_failure_rate_high
+    source: metric
+    condition: send_recipient_failure_total / total recipient results > 0.10 within 5m
+    severity: warning
+    for: 5m
+  - name: feishu_rate_limited
+    source: metric
+    condition: feishu_rate_limited_total increases within 5m
+    severity: warning
+    for: 0m
+  - name: send_task_stalled
+    source: structured_log_and_redis
+    condition: stalled_send_tasks > 0
+    severity: critical
+    for: 0m
+
+notes:
+  - This vendor-neutral example must be translated into the company monitoring platform syntax.
+  - Counters are exposed through GET /internal/metrics using the unified response envelope.

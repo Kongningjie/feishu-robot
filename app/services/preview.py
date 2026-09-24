@@ -1,4 +1,5 @@
 import re
+import time
 import uuid
 from collections import OrderedDict
 from dataclasses import replace
@@ -7,7 +8,13 @@ from typing import Protocol
 from zoneinfo import ZoneInfo
 
 from app.core.errors import AppError, StructuralError
-from app.models.domain import PreviewAnomalyData, PreviewSnapshot, RecipientAggregate, SheetDocument
+from app.models.domain import (
+    PreviewAnomalyData,
+    PreviewSnapshot,
+    RecipientAggregate,
+    SendResult,
+    SheetDocument,
+)
 from app.repositories.preview import PreviewRepository
 from app.schemas.preview import (
     CreatePreviewRequest,
@@ -15,6 +22,7 @@ from app.schemas.preview import (
     PreviewResponse,
     PreviewStatus,
     RecipientPreview,
+    RecipientSendResultResponse,
 )
 from app.services.sheet_parser import SheetParser
 
@@ -53,6 +61,7 @@ class PreviewService:
         max_recipients: int = 300,
         template_version: int = 1,
         timezone: str = "Asia/Shanghai",
+        metrics: object | None = None,
     ) -> None:
         self._feishu = feishu
         self._parser = parser
@@ -61,8 +70,10 @@ class PreviewService:
         self._max_recipients = max_recipients
         self._template_version = template_version
         self._timezone = ZoneInfo(timezone)
+        self._metrics = metrics
 
     async def create(self, request: CreatePreviewRequest) -> PreviewResponse:
+        started_at = time.perf_counter()
         source_url = str(request.spreadsheet_url)
         document = await self._feishu.fetch_document(source_url)
         parsed = self._parser.parse(document.rows, request.stage_name)
@@ -144,17 +155,24 @@ class PreviewService:
         )
         for _ in range(3):
             if await self._repository.save(snapshot, self._preview_ttl_seconds):
+                if self._metrics is not None:
+                    self._metrics.increment("preview_success_total")
+                    self._metrics.observe("preview_duration", time.perf_counter() - started_at)
                 return self._to_response(snapshot)
             snapshot = replace(snapshot, preview_id=f"pv_{uuid.uuid4().hex}")
         raise AppError("PREVIEW_ID_COLLISION", "生成预览标识失败，请重试", 503)
 
     async def get(self, preview_id: str) -> PreviewResponse:
-        snapshot = await self._repository.get(preview_id)
+        get_result = getattr(self._repository, "get_result", None)
+        result = await get_result(preview_id) if get_result is not None else None
+        snapshot = result.snapshot if result is not None else await self._repository.get(preview_id)
         if snapshot is None:
             raise AppError("PREVIEW_NOT_FOUND", "预览不存在或已过期", 404)
-        return self._to_response(snapshot)
+        return self._to_response(snapshot, result)
 
-    def _to_response(self, snapshot: PreviewSnapshot) -> PreviewResponse:
+    def _to_response(
+        self, snapshot: PreviewSnapshot, result: SendResult | None = None
+    ) -> PreviewResponse:
         today = datetime.now(self._timezone).date()
         deadline_date = snapshot.deadline.astimezone(self._timezone).date()
         day_delta = (deadline_date - today).days
@@ -164,9 +182,14 @@ class PreviewService:
             deadline_label = f"剩余{day_delta}天"
         else:
             deadline_label = f"已逾期{-day_delta}天"
+        send_results_by_id = (
+            {item.open_id: item for item in result.recipients} if result is not None else {}
+        )
+        successes = sum(item.status == "SUCCESS" for item in send_results_by_id.values())
+        failures = sum(item.status == "FAILED" for item in send_results_by_id.values())
         return PreviewResponse(
             previewId=snapshot.preview_id,
-            status=snapshot.status,
+            status=result.status if result is not None else snapshot.status,
             createdAt=snapshot.created_at,
             expiresAt=snapshot.expires_at,
             projectName=snapshot.project_name,
@@ -195,4 +218,37 @@ class PreviewService:
                 )
                 for item in snapshot.anomalies
             ],
+            successCount=successes,
+            failureCount=failures,
+            pendingCount=max(0, len(snapshot.recipients) - successes - failures),
+            attemptCount=sum(item.attempts for item in send_results_by_id.values()),
+            sendResults=[
+                RecipientSendResultResponse(
+                    displayName=recipient.display_name,
+                    maskedEmail=recipient.masked_email,
+                    status=(send_results_by_id.get(recipient.open_id).status
+                            if recipient.open_id in send_results_by_id else "PENDING"),
+                    attempts=(send_results_by_id.get(recipient.open_id).attempts
+                              if recipient.open_id in send_results_by_id else 0),
+                    messageId=self._mask_message_id(
+                        send_results_by_id.get(recipient.open_id).message_id
+                        if recipient.open_id in send_results_by_id else None
+                    ),
+                    errorCode=(send_results_by_id.get(recipient.open_id).error_code
+                               if recipient.open_id in send_results_by_id else None),
+                    errorMessage=(send_results_by_id.get(recipient.open_id).error_message
+                                  if recipient.open_id in send_results_by_id else None),
+                    updatedAt=(send_results_by_id.get(recipient.open_id).updated_at
+                               if recipient.open_id in send_results_by_id else None),
+                )
+                for recipient in snapshot.recipients
+            ],
         )
+
+    @staticmethod
+    def _mask_message_id(message_id: str | None) -> str | None:
+        if not message_id:
+            return None
+        if len(message_id) <= 8:
+            return "***"
+        return f"{message_id[:4]}***{message_id[-4:]}"

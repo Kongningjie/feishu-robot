@@ -33,6 +33,7 @@ async def ready(request: Request) -> Any:
     try:
         await request.app.state.redis.ping()
     except Exception:
+        request.app.state.metrics.increment("redis_errors_total")
         return JSONResponse(
             status_code=503,
             content={

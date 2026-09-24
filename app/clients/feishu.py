@@ -7,7 +7,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 
 import httpx
 
-from app.core.errors import StructuralError, UpstreamError
+from app.core.errors import MessageSendError, StructuralError, UpstreamError
 from app.models.domain import SheetDocument, SheetReference
 
 _TOKEN_KEY = "feishu:tenant_token"
@@ -60,7 +60,7 @@ def _chunks(items: list[str], size: int) -> Iterable[list[str]]:
 
 
 class FeishuClient:
-    """阶段 1 所需的飞书 OpenAPI 异步客户端；不包含任何消息发送能力。"""
+    """飞书 OpenAPI 异步客户端。"""
 
     def __init__(
         self,
@@ -71,6 +71,7 @@ class FeishuClient:
         allowed_hosts: set[str],
         token_cache: TokenCache | None = None,
         api_base_url: str = "https://open.feishu.cn/open-apis",
+        metrics: Any | None = None,
     ) -> None:
         self._http = http
         self._app_id = app_id
@@ -78,6 +79,7 @@ class FeishuClient:
         self._allowed_hosts = allowed_hosts
         self._token_cache = token_cache
         self._api_base_url = api_base_url.rstrip("/")
+        self._metrics = metrics
         self._token_lock = asyncio.Lock()
         self._local_token: str | None = None
         self._local_token_expires_at = 0.0
@@ -113,10 +115,16 @@ class FeishuClient:
                 response.raise_for_status()
                 payload = response.json()
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                if self._metrics is not None:
+                    self._metrics.increment("token_refresh_failure_total")
                 raise UpstreamError("UPSTREAM_TIMEOUT", "获取飞书访问令牌超时", 504) from exc
             except (httpx.HTTPError, ValueError) as exc:
+                if self._metrics is not None:
+                    self._metrics.increment("token_refresh_failure_total")
                 raise UpstreamError("TOKEN_REFRESH_FAILED", "获取飞书访问令牌失败", 502) from exc
             if payload.get("code", 0) != 0 or not payload.get("tenant_access_token"):
+                if self._metrics is not None:
+                    self._metrics.increment("token_refresh_failure_total")
                 raise UpstreamError("TOKEN_REFRESH_FAILED", "获取飞书访问令牌失败", 502)
             token = str(payload["tenant_access_token"])
             ttl = max(1, int(payload.get("expire", 7200)) - 60)
@@ -247,3 +255,91 @@ class FeishuClient:
                 if email and open_id and open_id not in mapped[email]:
                     mapped[email].append(open_id)
         return {email: tuple(open_ids) for email, open_ids in mapped.items()}
+
+    async def send_card(
+        self,
+        open_id: str,
+        content: str,
+        *,
+        retried_token: bool = False,
+        idempotency_key: str | None = None,
+    ) -> str:
+        try:
+            token = await self._get_token(force_refresh=retried_token)
+        except UpstreamError as exc:
+            raise MessageSendError(
+                exc.code,
+                exc.message,
+                retryable=exc.code in {"UPSTREAM_TIMEOUT", "UPSTREAM_SERVER_ERROR"},
+            ) from exc
+        try:
+            response = await self._http.post(
+                f"{self._api_base_url}/im/v1/messages",
+                params={"receive_id_type": "open_id"},
+                json={
+                    "receive_id": open_id,
+                    "msg_type": "interactive",
+                    "content": content,
+                    **({"uuid": idempotency_key} if idempotency_key else {}),
+                },
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            raise MessageSendError(
+                "UPSTREAM_TIMEOUT", "飞书消息接口请求超时", retryable=True
+            ) from exc
+
+        retry_after: float | None = None
+        if response.headers.get("Retry-After"):
+            try:
+                retry_after = max(0.0, float(response.headers["Retry-After"]))
+            except ValueError:
+                retry_after = None
+        if response.status_code == 429:
+            if self._metrics is not None:
+                self._metrics.increment("feishu_rate_limited_total")
+            raise MessageSendError(
+                "UPSTREAM_RATE_LIMITED",
+                "飞书消息接口请求过于频繁",
+                retryable=True,
+                retry_after_seconds=retry_after,
+            )
+        if response.status_code >= 500:
+            raise MessageSendError(
+                "UPSTREAM_SERVER_ERROR", "飞书消息服务暂时不可用", retryable=True
+            )
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise MessageSendError("MESSAGE_INVALID", "飞书消息接口返回无效数据") from exc
+        code = int(payload.get("code", 0))
+        if code in _TOKEN_INVALID_CODES and not retried_token:
+            return await self.send_card(
+                open_id,
+                content,
+                retried_token=True,
+                idempotency_key=idempotency_key,
+            )
+        if code in _TOKEN_INVALID_CODES:
+            raise MessageSendError(
+                "TOKEN_REFRESH_FAILED", "飞书访问令牌刷新后仍不可用", feishu_code=code
+            )
+        message = str(payload.get("msg", "")).lower()
+        if response.status_code in {401, 403} or "permission" in message or "forbidden" in message:
+            raise MessageSendError(
+                "MESSAGE_PERMISSION_DENIED", "应用无权发送消息", feishu_code=code or None
+            )
+        if response.status_code == 404 or any(
+            marker in message for marker in ("user not found", "invalid receive", "not in tenant")
+        ):
+            raise MessageSendError(
+                "RECIPIENT_UNREACHABLE", "接收人不可达", feishu_code=code or None
+            )
+        if code != 0 or response.status_code >= 400:
+            raise MessageSendError(
+                "MESSAGE_INVALID", "消息卡片或请求参数非法", feishu_code=code or None
+            )
+        message_id = str(payload.get("data", {}).get("message_id", "")).strip()
+        if not message_id:
+            raise MessageSendError("MESSAGE_INVALID", "飞书消息接口未返回消息标识")
+        return message_id
